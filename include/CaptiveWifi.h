@@ -1,3 +1,6 @@
+#ifndef CAPTIVEWIFI_H
+#define CAPTIVEWIFI_H
+
 #include <WiFi.h>
 #include <DNSServer.h>
 #include <WebServer.h>
@@ -8,106 +11,125 @@ private:
     WebServer server;
     DNSServer dnsServer;
     Preferences prefs;
-    const byte DNS_PORT = 53;
-    String fullApName; // Stores the calculated unique SSID
 
-    // Helper: Calculates unique ID from MAC Address
-    String getUniqueName(String baseName) {
-        uint8_t mac[6];
-        WiFi.macAddress(mac);
-        char uniqueId[7];
-        // Uses the last 3 bytes of the MAC (e.g., 0A:1B:2C)
-        snprintf(uniqueId, sizeof(uniqueId), "-%02X%02X%02X", mac[3], mac[4], mac[5]);
-        return baseName + uniqueId;
-    }
-    
-    String getHTMLHead() {
-        return "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>"
-               "<style>body{font-family:-apple-system,sans-serif; background:#f0f2f5; color:#1c1e21; display:flex; flex-direction:column; align-items:center; padding:20px;}"
-               ".card{background:white; padding:24px; border-radius:16px; box-shadow:0 8px 24px rgba(0,0,0,0.1); width:100%; max-width:380px;}"
-               "h2{margin:0 0 10px 0; color:#007bff;} h3{font-size:14px; color:#65676b; text-transform:uppercase; margin-bottom:10px;}"
-               ".btn{background:#007bff; color:white; border:none; padding:14px; border-radius:8px; width:100%; cursor:pointer; font-weight:bold; font-size:16px; margin-top:10px; transition:0.2s;}"
-               ".btn:active{transform:scale(0.98); background:#0069d9;}"
-               ".btn-red{background:#fa3e3e;} .btn-red:active{background:#d92121;}"
-               ".btn-outline{background:none; border:2px solid #007bff; color:#007bff; margin-top:20px;}"
-               "input{width:100%; padding:12px; margin:8px 0; border:1px solid #dddfe2; border-radius:8px; box-sizing:border-box; font-size:16px;}"
-               ".wifi-list{list-style:none; padding:0; margin:0 0 20px 0; max-height:200px; overflow-y:auto; border:1px solid #eee; border-radius:8px;}"
-               ".wifi-item{padding:12px; border-bottom:1px solid #eee; cursor:pointer; display:flex; justify-content:space-between; align-items:center;}"
-               ".wifi-item:last-child{border-bottom:none;} .wifi-item:hover{background:#f0f7ff;}</style></head><body><div class='card'>";
-    }
-
-    void handleRoot() {
-        String html = getHTMLHead() + "<h2>WiFi Setup</h2>";
-        html += "<h3>Available Networks</h3><ul class='wifi-list'>";
-        int n = WiFi.scanNetworks();
-        if (n <= 0) {
-            html += "<li class='wifi-item'>No networks found</li>";
-        } else {
-            for (int i = 0; i < n; ++i) {
-                html += "<li class='wifi-item' onclick='f(\"" + WiFi.SSID(i) + "\")'><span>" + WiFi.SSID(i) + "</span><small>" + String(WiFi.RSSI(i)) + "dBm</small></li>";
-            }
+    bool isIp(String str) {
+        for (size_t i = 0; i < str.length(); i++) {
+            int c = str.charAt(i);
+            if (c != '.' && (c < '0' || c > '9')) return false;
         }
-        html += "</ul><form action='/save' method='POST'>"
-                "<input id='s' name='ssid' placeholder='WiFi Name' required>"
-                "<input name='pass' type='password' placeholder='Password' required>"
-                "<button class='btn'>Connect Device</button></form>"
-                "<button class='btn btn-outline' onclick='location.href=\"/restart\"'>Restart ESP32</button>"
-                "<button class='btn btn-red' onclick='if(confirm(\"Wipe all settings?\"))location.href=\"/clear\"'>Clear Saved WiFi</button>"
-                "<script>function f(s){document.getElementById(\"s\").value=s;}</script></div></body></html>";
-        server.send(200, "text/html", html);
+        return true;
     }
 
 public:
     CaptiveWifi() : server(80) {}
 
-    // You can now pass a base name like "ESP-Config"
-    void startPortal(String baseName = "ESP32-Portal") {
-        fullApName = getUniqueName(baseName);
+    String getMacSuffix() {
+        uint8_t mac[6];
+        WiFi.macAddress(mac);
+        char buf[7];
+        sprintf(buf, "%02X%02X%02X", mac[3], mac[4], mac[5]);
+        return String(buf);
+    }
+
+    void clearCredentials() {
+        prefs.begin("wifi-creds", false);
+        prefs.clear();
+        prefs.end();
+        Serial.println("[WIFI] Credentials cleared!");
+    }
+
+    void startPortal() {
+        String fullName = "ESP-LaserTag-" + getMacSuffix();
         
+        Serial.println("[PORTAL] Scanning available networks...");
+        WiFi.mode(WIFI_STA);
+        WiFi.disconnect();
+        delay(100);
+        
+        int n = WiFi.scanNetworks();
+        String opts = "";
+        if (n == 0) {
+            opts = "<option>No networks found</option>";
+        } else {
+            for (int i = 0; i < n; ++i) {
+                opts += "<option value='" + WiFi.SSID(i) + "'>" + WiFi.SSID(i) + " (" + WiFi.RSSI(i) + "dBm)</option>";
+            }
+        }
+
         WiFi.mode(WIFI_AP);
-        WiFi.softAP(fullApName.c_str());
-        dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
+        IPAddress apIP(192, 168, 4, 1);
+        WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
+        WiFi.softAP(fullName.c_str());
 
-        Serial.println("\n--- CAPTIVE PORTAL ACTIVE ---");
-        Serial.print("Device SSID: "); Serial.println(fullApName);
-        Serial.print("Portal IP:   "); Serial.println(WiFi.softAPIP());
-        Serial.println("-----------------------------");
+        Serial.println("==========================================");
+        Serial.println("[PORTAL] Captive Portal Started!");
+        Serial.println("[PORTAL] SSID: " + fullName);
+        Serial.println("[PORTAL] IP: 192.168.4.1");
+        Serial.println("[PORTAL] Connect and configure WiFi");
+        Serial.println("==========================================");
 
-        server.on("/", [this](){ handleRoot(); });
+        dnsServer.start(53, "*", apIP);
         
-        server.on("/save", [this]() {
+        // Main page
+        server.on("/", [this, opts](){
+            String h = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width, initial-scale=1'>";
+            h += "<style>body{font-family:Arial,sans-serif;background:linear-gradient(135deg,#0d0f14,#1a1d24);color:#fff;padding:20px;margin:0;}";
+            h += ".container{max-width:400px;margin:50px auto;background:rgba(255,255,255,0.05);padding:30px;border-radius:16px;border:1px solid rgba(255,255,255,0.1);box-shadow:0 8px 32px rgba(0,0,0,0.4);}";
+            h += "h2{text-align:center;color:#00d2ff;margin-bottom:30px;font-size:24px;}";
+            h += "label{display:block;margin:15px 0 5px;font-weight:600;color:#aaa;font-size:12px;text-transform:uppercase;letter-spacing:1px;}";
+            h += "select,input{width:100%;padding:14px;margin:8px 0 20px;border-radius:8px;border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.05);color:#fff;font-size:14px;box-sizing:border-box;}";
+            h += "select:focus,input:focus{outline:none;border-color:#00d2ff;box-shadow:0 0 0 2px rgba(0,210,255,0.2);}";
+            h += "button{width:100%;padding:16px;background:linear-gradient(135deg,#00d2ff,#3a7bd5);border:none;border-radius:8px;font-weight:bold;color:#000;font-size:16px;cursor:pointer;transition:all 0.3s;}";
+            h += "button:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,210,255,0.4);}";
+            h += ".info{text-align:center;margin-top:20px;font-size:11px;color:#666;}";
+            h += "</style></head><body><div class='container'>";
+            h += "<h2>ESP LASER TAG</h2>";
+            h += "<form action='/save' method='POST'>";
+            h += "<label>Select Network</label>";
+            h += "<select name='ssid' required>" + opts + "</select>";
+            h += "<label>WiFi Password</label>";
+            h += "<input name='pass' type='password' placeholder='Enter password' required>";
+            h += "<button type='submit'>[SAVE] SAVE & CONNECT</button>";
+            h += "</form>";
+            h += "<div class='info'>MAC: " + WiFi.macAddress() + "</div>";
+            h += "</div></body></html>";
+            server.send(200, "text/html", h);
+        });
+        
+        // Save credentials
+        server.on("/save", [this](){
+            String ssid = server.arg("ssid");
+            String pass = server.arg("pass");
+            
             prefs.begin("wifi-creds", false);
-            prefs.putString("ssid", server.arg("ssid"));
-            prefs.putString("pass", server.arg("pass"));
+            prefs.putString("ssid", ssid);
+            prefs.putString("pass", pass);
             prefs.end();
-            server.send(200, "text/html", "Settings saved! Rebooting...");
-            delay(1000);
+            
+            Serial.println("[PORTAL] Credentials saved!");
+            Serial.println("[PORTAL] SSID: " + ssid);
+            
+            String h = "<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width'>";
+            h += "<style>body{font-family:Arial;background:linear-gradient(135deg,#0d0f14,#1a1d24);color:#fff;text-align:center;padding:50px;}";
+            h += ".success{background:rgba(0,255,136,0.1);border:2px solid #00ff88;padding:30px;border-radius:16px;max-width:400px;margin:auto;}";
+            h += "h2{color:#00ff88;margin-bottom:20px;}</style></head>";
+            h += "<body><div class='success'><h2>[OK] Success!</h2><p>WiFi credentials saved.<br>Restarting ESP32...</p></div></body></html>";
+            
+            server.send(200, "text/html", h);
+            delay(2000); 
             ESP.restart();
         });
 
-        server.on("/restart", [this]() {
-            server.send(200, "text/html", "Rebooting...");
-            delay(1000);
-            ESP.restart();
+        // Captive portal redirect
+        server.onNotFound([this](){
+            server.sendHeader("Location", "http://192.168.4.1/", true);
+            server.send(302, "text/plain", "");
         });
-
-        server.on("/clear", [this]() {
-            prefs.begin("wifi-creds", false);
-            prefs.clear();
-            prefs.end();
-            server.send(200, "text/html", "WiFi Cleared. Rebooting...");
-            delay(1000);
-            ESP.restart();
-        });
-
-        auto redirect = [this]() { server.sendHeader("Location", "/", true); server.send(302, "text/plain", ""); };
-        server.on("/generate_204", redirect);
-        server.on("/fwlink", redirect);
-        server.on("/hotspot-detect.html", redirect);
-        server.onNotFound(redirect);
-
+        
         server.begin();
-        while (true) {
+        
+        // Loop forever in portal mode
+        while(true) {
             dnsServer.processNextRequest();
             server.handleClient();
             yield();
@@ -116,23 +138,35 @@ public:
 
     bool tryConnect() {
         prefs.begin("wifi-creds", true);
-        String ssid = prefs.getString("ssid", "");
-        String pass = prefs.getString("pass", "");
+        String s = prefs.getString("ssid", "");
+        String p = prefs.getString("pass", "");
         prefs.end();
-
-        if (ssid == "") return false;
-
-        Serial.print("\n[+] Attempting to connect to: ");
-        Serial.println(ssid);
-
-        WiFi.begin(ssid.c_str(), pass.c_str());
-        int c = 0;
-        while (WiFi.status() != WL_CONNECTED && c < 20) {
-            delay(500);
-            Serial.print(".");
-            c++;
+        
+        if(s == "" || s == "null") {
+            Serial.println("[WIFI] No saved credentials found");
+            return false;
         }
-        Serial.println("");
-        return (WiFi.status() == WL_CONNECTED);
+        
+        Serial.print("[WIFI] Connecting to: "); Serial.println(s);
+        WiFi.mode(WIFI_STA);
+        WiFi.begin(s.c_str(), p.c_str());
+        
+        int attempts = 0;
+        while(WiFi.status() != WL_CONNECTED && attempts < 30) {
+            delay(500); 
+            Serial.print(".");
+            attempts++;
+        }
+        Serial.println();
+        
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.println("[WIFI] Connection successful!");
+            return true;
+        } else {
+            Serial.println("[WIFI] Connection failed!");
+            return false;
+        }
     }
 };
+
+#endif
