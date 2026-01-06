@@ -3,6 +3,7 @@
 ESP32 firmware for wireless laser tag devices. Connects to ESPNet server via UDP and handles laser sensor input, manual tag buttons, and WiFi configuration through a captive portal.
 
 For the server use [ESPNet Server](https://github.com/Daemonide/ESPNet-Server)
+
 For the frontend use [ESPNet Server Frontend](https://github.com/Daemonide/ESPNet-Server-Frontend)
 
 ## Pin Configuration
